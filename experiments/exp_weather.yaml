@@ -1,0 +1,19 @@
+exp_id: weather_mvp
+output_root: results
+agent:
+  model: openai/gpt-4o-mini
+  base_url: https://openrouter.ai/api/v1/chat/completions
+  api_key_env: OPENROUTER_API_KEY
+shield:
+  enabled: false
+  stage_mode: []
+runs:
+  - run_id: ca_sf
+    query: "weather in San Francisco"
+    server_id: weather_ca
+  - run_id: ca_la
+    query: "weather in Los Angeles"
+    server_id: weather_ca
+  - run_id: ny_nyc
+    query: "weather in New York"
+    server_id: weather_ny
