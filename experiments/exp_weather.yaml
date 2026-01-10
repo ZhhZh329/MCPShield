@@ -6,7 +6,11 @@ agent:
   api_key_env: OPENROUTER_API_KEY
 shield:
   enabled: false
-  stage_mode: []
+  pre: true
+  exec: false
+  post: false
+  pre_mock_count: 4
+  pre_deny_ratio: 0.5
 runs:
   - run_id: ca_sf
     query: "weather in San Francisco"

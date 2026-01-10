@@ -18,7 +18,7 @@ if str(SRC) not in sys.path:
 
 from mcpshield.agents.main_agent import MainAgent
 from mcpshield.client import MCPClient
-from mcpshield.shield import MCPShield
+from mcpshield.shield import MCPShield, MCPShieldDeny
 
 
 def load_env(path: Path) -> None:
@@ -90,6 +90,10 @@ def run_exp(exp_path: Path) -> Path:
 
     exp_id = exp["exp_id"]
     output_root = exp.get("output_root", "results")
+    log_level = exp.get("log_level")
+    debug = exp.get("debug", False)
+    if log_level is not None:
+        debug = str(log_level).lower() == "debug"
     out_dir = ensure_output_dir(exp_id, output_root)
     shutil.copy2(exp_path, out_dir / exp_path.name)
 
@@ -106,32 +110,70 @@ def run_exp(exp_path: Path) -> Path:
 
     shield_cfg = exp.get("shield", {})
     shield_enabled = bool(shield_cfg.get("enabled", False))
-    stage_mode = shield_cfg.get("stage_mode", [])
+    pre_enabled = bool(shield_cfg.get("pre", False))
+    exec_enabled = bool(shield_cfg.get("exec", False))
+    post_enabled = bool(shield_cfg.get("post", False))
+    pre_mock_count = int(shield_cfg.get("pre_mock_count", 4))
+    pre_deny_ratio = float(shield_cfg.get("pre_deny_ratio", 0.5))
+
+    agent.stage1_whitelist = set()
+    agent.stage1_blacklist = set()
 
     for run_case in exp.get("runs", []):
         run_id = run_case.get("run_id")
         query = run_case.get("query")
         server_id = run_case.get("server_id")
+        pre_logs: list[dict] = []
         run_ctx = {
             "exp_id": exp_id,
             "run_id": run_id,
             "server_id": server_id,
-            "stage_mode": stage_mode,
+            "shield": {
+                "enabled": shield_enabled,
+                "pre": pre_enabled,
+                "exec": exec_enabled,
+                "post": post_enabled,
+                "pre_mock_count": pre_mock_count,
+            },
             "start_ts": time.time(),
         }
 
         ok = True
         error = None
         output = None
+        deny = None
         try:
             if server_id:
                 server = load_server(server_id)
                 client = MCPClient(server)
-                tools = MCPShield(client, stage_mode) if shield_enabled else client
+                if shield_enabled:
+                    tools = MCPShield(
+                        client,
+                        pre_enabled=pre_enabled,
+                        exec_enabled=exec_enabled,
+                        post_enabled=post_enabled,
+                        model=model,
+                        base_url=base_url,
+                        api_key=api_key,
+                        pre_mock_count=pre_mock_count,
+                        pre_deny_ratio=pre_deny_ratio,
+                        whitelist=agent.stage1_whitelist,
+                        blacklist=agent.stage1_blacklist,
+                        pre_logs=pre_logs,
+                    )
+                else:
+                    tools = client
             else:
                 tools = _EmptyTools()
             agent.tools = tools
             output = agent.run(query, run_ctx)
+        except MCPShieldDeny as exc:
+            ok = False
+            deny = {
+                "server_id": exc.server_id,
+                "reason": exc.reason,
+                "mock_matrix": exc.mock_matrix,
+            }
         except Exception as exc:
             ok = False
             error = str(exc)
@@ -143,10 +185,15 @@ def run_exp(exp_path: Path) -> Path:
             "ok": ok,
             "error": error,
             "output": output,
+            "shield_pre": pre_logs if shield_enabled else None,
+            "deny": deny,
         }
         write_jsonl_line(out_dir / "run_records.jsonl", record)
-        status = "ok" if ok else "error"
+        status = "ok" if ok else ("deny" if deny else "error")
         print(f"[run_exp] {run_id} {status}")
+        if deny and debug:
+            print("[debug] deny detail:")
+            print(json.dumps(deny, ensure_ascii=True, indent=2))
 
     return out_dir
 
