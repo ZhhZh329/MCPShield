@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from .client import MCPClient
 from .prompts.stage1 import build_eval_prompt, build_mock_prompt
+
+
+@runtime_checkable
+class ServerToolsProtocol(Protocol):
+    """结构化类型协议 - 任何有这些方法的对象都可以作为client使用."""
+    
+    def fetch_manifest(self) -> dict:
+        """返回工具清单 {"tools": [...]}."""
+        ...
+    
+    def invoke(self, tool_name: str, args: dict, invocation_ctx: dict | None = None) -> Any:
+        """调用指定工具."""
+        ...
 
 
 class MCPShieldDeny(Exception):
@@ -29,7 +42,7 @@ class MCPShieldDeny(Exception):
 class MCPShield:
     def __init__(
         self,
-        client: MCPClient,
+        client: ServerToolsProtocol,  # 接受任何满足Protocol的client
         *,
         pre_enabled: bool = False,
         exec_enabled: bool = False,

@@ -1,0 +1,469 @@
+[
+  {
+    "server_name": "date",
+    "server_index": 0,
+    "description": "Date and time utilities",
+    "tools": [
+      {
+        "name": "get_today_date",
+        "description": "Get today's date in YYYY-MM-DD format.",
+        "parameters": [],
+        "returns": {"type": "string", "example": "2024-01-15"}
+      },
+      {
+        "name": "get_current_datetime",
+        "description": "Get the current date and time in ISO format.",
+        "parameters": [],
+        "returns": {"type": "string", "example": "2024-01-15T10:30:00.000000"}
+      },
+      {
+        "name": "get_current_datetime_utc",
+        "description": "Get the current date and time in UTC timezone.",
+        "parameters": [],
+        "returns": {"type": "string", "example": "2024-01-15T02:30:00.000000+00:00"}
+      },
+      {
+        "name": "get_date_in_timezone",
+        "description": "Get the current date and time in a specific timezone.",
+        "parameters": [
+          {"name": "timezone_name", "type": "string", "required": true, "description": "Timezone name (e.g., 'America/New_York', 'Europe/London', 'Asia/Tokyo')"}
+        ],
+        "returns": {"type": "string", "example": "2024-01-15 05:30:00 EST (America/New_York)"}
+      },
+      {
+        "name": "get_timestamp",
+        "description": "Get the current Unix timestamp.",
+        "parameters": [],
+        "returns": {"type": "string", "example": "1705312200"}
+      }
+    ]
+  },
+  {
+    "server_name": "weather",
+    "server_index": 1,
+    "description": "Weather information from NWS API",
+    "tools": [
+      {
+        "name": "get_alerts",
+        "description": "Get weather alerts for a US state.",
+        "parameters": [
+          {"name": "state", "type": "string", "required": true, "description": "Two-letter US state code (e.g. CA, NY)"}
+        ],
+        "returns": {"type": "string", "example": "Event: Winter Storm Warning\nArea: San Francisco Bay Area\nSeverity: Moderate\nDescription: Heavy snow expected..."}
+      },
+      {
+        "name": "get_forecast",
+        "description": "Get weather forecast for a location.",
+        "parameters": [
+          {"name": "latitude", "type": "number", "required": true, "description": "Latitude of the location"},
+          {"name": "longitude", "type": "number", "required": true, "description": "Longitude of the location"}
+        ],
+        "returns": {"type": "string", "example": "Today:\nTemperature: 72°F\nWind: 10 mph SW\nForecast: Partly cloudy with a chance of rain..."}
+      }
+    ]
+  },
+  {
+    "server_name": "echo",
+    "server_index": 2,
+    "description": "Echo service for testing",
+    "tools": [
+      {
+        "name": "echo_tool",
+        "description": "Echo the input text",
+        "parameters": [
+          {"name": "text", "type": "string", "required": true, "description": "The text to echo"}
+        ],
+        "returns": {"type": "string", "example": "Hello World"}
+      }
+    ]
+  },
+  {
+    "server_name": "wikipedia",
+    "server_index": 3,
+    "description": "Wikipedia search and information",
+    "tools": [
+      {
+        "name": "search",
+        "description": "Fetch Wikipedia information for a given search query.",
+        "parameters": [
+          {"name": "query", "type": "string", "required": true, "description": "The search query string"}
+        ],
+        "returns": {"type": "object", "example": {"query": "Python", "title": "Python (programming language)", "summary": "Python is a high-level, general-purpose programming language..."}}
+      }
+    ]
+  },
+  {
+    "server_name": "terminal",
+    "server_index": 4,
+    "description": "Terminal command execution",
+    "tools": [
+      {
+        "name": "run_command",
+        "description": "Run a terminal command inside the workspace directory.",
+        "parameters": [
+          {"name": "command", "type": "string", "required": true, "description": "The shell command to run"}
+        ],
+        "returns": {"type": "string", "example": "total 24\ndrwxr-xr-x  5 user  staff  160 Jan 15 10:30 .\ndrwxr-xr-x  3 user  staff   96 Jan 15 10:30 .."}
+      }
+    ]
+  },
+  {
+    "server_name": "github",
+    "server_index": 5,
+    "description": "GitHub operations",
+    "tools": [
+      {
+        "name": "get_me",
+        "description": "Get details of the authenticated GitHub user.",
+        "parameters": [],
+        "returns": {"type": "object", "example": {"login": "octocat", "id": 1, "name": "The Octocat", "email": "octocat@github.com"}}
+      },
+      {
+        "name": "search_repositories",
+        "description": "Find GitHub repositories by name, description, readme, topics, or other metadata.",
+        "parameters": [
+          {"name": "query", "type": "string", "required": true, "description": "Search query string"},
+          {"name": "page", "type": "integer", "required": false, "description": "Page number (default 1)"},
+          {"name": "per_page", "type": "integer", "required": false, "description": "Results per page (default 30)"}
+        ],
+        "returns": {"type": "object", "example": {"total_count": 100, "repositories": [{"name": "repo1", "full_name": "user/repo1"}]}}
+      },
+      {
+        "name": "get_file_contents",
+        "description": "Get file or directory contents from a repository.",
+        "parameters": [
+          {"name": "owner", "type": "string", "required": true, "description": "Repository owner"},
+          {"name": "repo", "type": "string", "required": true, "description": "Repository name"},
+          {"name": "path", "type": "string", "required": true, "description": "File path"},
+          {"name": "ref", "type": "string", "required": false, "description": "Git reference (branch, tag or commit SHA)"}
+        ],
+        "returns": {"type": "object", "example": {"name": "README.md", "path": "README.md", "content": "# Project Title..."}}
+      },
+      {
+        "name": "create_or_update_file",
+        "description": "Create or update a file in a repository.",
+        "parameters": [
+          {"name": "owner", "type": "string", "required": true, "description": "Repository owner"},
+          {"name": "repo", "type": "string", "required": true, "description": "Repository name"},
+          {"name": "path", "type": "string", "required": true, "description": "File path"},
+          {"name": "message", "type": "string", "required": true, "description": "Commit message"},
+          {"name": "content", "type": "string", "required": true, "description": "File content"},
+          {"name": "branch", "type": "string", "required": false, "description": "Branch name"}
+        ],
+        "returns": {"type": "object", "example": {"commit": {"sha": "abc123", "message": "Update file"}}}
+      },
+      {
+        "name": "create_issue",
+        "description": "Create a new issue in a repository.",
+        "parameters": [
+          {"name": "owner", "type": "string", "required": true, "description": "Repository owner"},
+          {"name": "repo", "type": "string", "required": true, "description": "Repository name"},
+          {"name": "title", "type": "string", "required": true, "description": "Issue title"},
+          {"name": "body", "type": "string", "required": false, "description": "Issue description"}
+        ],
+        "returns": {"type": "object", "example": {"number": 1, "title": "Bug report", "html_url": "https://github.com/user/repo/issues/1"}}
+      }
+    ]
+  },
+  {
+    "server_name": "yahoo_finance",
+    "server_index": 6,
+    "description": "Yahoo Finance stock data",
+    "tools": [
+      {
+        "name": "get_stock_info",
+        "description": "Get stock information for a given ticker symbol from yahoo finance.",
+        "parameters": [
+          {"name": "ticker", "type": "string", "required": true, "description": "The ticker symbol of the stock (e.g. AAPL)"}
+        ],
+        "returns": {"type": "object", "example": {"symbol": "AAPL", "shortName": "Apple Inc.", "currentPrice": 185.50, "marketCap": 2900000000000}}
+      },
+      {
+        "name": "get_yahoo_finance_news",
+        "description": "Get news for a given ticker symbol from yahoo finance.",
+        "parameters": [
+          {"name": "ticker", "type": "string", "required": true, "description": "The ticker symbol of the stock (e.g. AAPL)"}
+        ],
+        "returns": {"type": "array", "example": ["Title: Apple Reports Q4 Earnings\nSummary: Apple Inc. reported..."]}
+      },
+      {
+        "name": "get_historical_stock_prices",
+        "description": "Get historical stock prices for a given ticker symbol.",
+        "parameters": [
+          {"name": "ticker", "type": "string", "required": true, "description": "The ticker symbol"},
+          {"name": "start_date", "type": "string", "required": true, "description": "Start date (yyyy-mm-dd)"},
+          {"name": "end_date", "type": "string", "required": true, "description": "End date (yyyy-mm-dd)"},
+          {"name": "interval", "type": "string", "required": false, "description": "Interval (1d, 1wk, 1mo)"}
+        ],
+        "returns": {"type": "array", "example": [{"Date": "2024-01-15", "Open": 185.0, "Close": 186.5, "Volume": 50000000}]}
+      },
+      {
+        "name": "get_stock_alert",
+        "description": "Set up stock price alerts and display messages when conditions are met.",
+        "parameters": [
+          {"name": "ticker", "type": "string", "required": true, "description": "The stock ticker symbol"},
+          {"name": "alert_type", "type": "string", "required": true, "description": "Alert type: above or below"},
+          {"name": "threshold", "type": "number", "required": true, "description": "Price threshold"},
+          {"name": "msg", "type": "string", "required": false, "description": "Message to display when alert triggers"}
+        ],
+        "returns": {"type": "object", "example": {"ticker": "AAPL", "alert_triggered": true, "current_price": 186.5}}
+      }
+    ]
+  },
+  {
+    "server_name": "playwright",
+    "server_index": 7,
+    "description": "Browser automation with Playwright",
+    "tools": [
+      {
+        "name": "playwright_navigate",
+        "description": "Navigate to a URL. This will auto create a session if none exists.",
+        "parameters": [
+          {"name": "url", "type": "string", "required": true, "description": "URL to navigate to"}
+        ],
+        "returns": {"type": "string", "example": "Successfully navigated to https://example.com\nPage content preview: Welcome to Example..."}
+      },
+      {
+        "name": "playwright_screenshot",
+        "description": "Take a screenshot of the current page or a specific element.",
+        "parameters": [
+          {"name": "name", "type": "string", "required": true, "description": "Name for the screenshot"},
+          {"name": "selector", "type": "string", "required": false, "description": "CSS selector for element to screenshot"}
+        ],
+        "returns": {"type": "object", "example": {"name": "homepage", "base64": "iVBORw0KGgo...", "message": "Screenshot taken: homepage"}}
+      },
+      {
+        "name": "playwright_click",
+        "description": "Click an element on the page using CSS selector.",
+        "parameters": [
+          {"name": "selector", "type": "string", "required": true, "description": "CSS selector for element to click"}
+        ],
+        "returns": {"type": "string", "example": "Successfully clicked element with selector: #submit-button"}
+      },
+      {
+        "name": "playwright_fill",
+        "description": "Fill out an input field.",
+        "parameters": [
+          {"name": "selector", "type": "string", "required": true, "description": "CSS selector for input field"},
+          {"name": "value", "type": "string", "required": true, "description": "Value to fill"}
+        ],
+        "returns": {"type": "string", "example": "Successfully filled element with selector '#email' with value: test@example.com"}
+      },
+      {
+        "name": "playwright_evaluate",
+        "description": "Execute JavaScript in the browser console.",
+        "parameters": [
+          {"name": "script", "type": "string", "required": true, "description": "JavaScript code to execute"}
+        ],
+        "returns": {"type": "string", "example": "Script executed successfully. Result: {\"title\": \"Example Page\"}"}
+      }
+    ]
+  },
+  {
+    "server_name": "chroma",
+    "server_index": 8,
+    "description": "Chroma vector database operations",
+    "tools": [
+      {
+        "name": "chroma_list_collections",
+        "description": "List all collection names in the Chroma database.",
+        "parameters": [
+          {"name": "limit", "type": "integer", "required": false, "description": "Maximum number of collections to return"},
+          {"name": "offset", "type": "integer", "required": false, "description": "Number of collections to skip"}
+        ],
+        "returns": {"type": "array", "example": ["documents", "embeddings", "knowledge_base"]}
+      },
+      {
+        "name": "chroma_create_collection",
+        "description": "Create a new Chroma collection.",
+        "parameters": [
+          {"name": "collection_name", "type": "string", "required": true, "description": "Name of the collection to create"},
+          {"name": "embedding_function_name", "type": "string", "required": false, "description": "Embedding function (default, openai, cohere)"}
+        ],
+        "returns": {"type": "string", "example": "Successfully created collection my_collection"}
+      },
+      {
+        "name": "chroma_add_documents",
+        "description": "Add documents to a Chroma collection.",
+        "parameters": [
+          {"name": "collection_name", "type": "string", "required": true, "description": "Name of the collection"},
+          {"name": "documents", "type": "array", "required": true, "description": "List of text documents to add"},
+          {"name": "ids", "type": "array", "required": true, "description": "List of IDs for the documents"}
+        ],
+        "returns": {"type": "string", "example": "Successfully added 5 documents to collection my_collection"}
+      },
+      {
+        "name": "chroma_query_documents",
+        "description": "Query documents from a Chroma collection.",
+        "parameters": [
+          {"name": "collection_name", "type": "string", "required": true, "description": "Name of the collection"},
+          {"name": "query_texts", "type": "array", "required": true, "description": "List of query texts"},
+          {"name": "n_results", "type": "integer", "required": false, "description": "Number of results per query"}
+        ],
+        "returns": {"type": "object", "example": {"documents": [["doc1", "doc2"]], "distances": [[0.1, 0.2]]}}
+      },
+      {
+        "name": "chroma_delete_collection",
+        "description": "Delete a Chroma collection.",
+        "parameters": [
+          {"name": "collection_name", "type": "string", "required": true, "description": "Name of the collection to delete"}
+        ],
+        "returns": {"type": "string", "example": "Successfully deleted collection my_collection"}
+      }
+    ]
+  },
+  {
+    "server_name": "url_fetch",
+    "server_index": 9,
+    "description": "URL content fetching",
+    "tools": [
+      {
+        "name": "fetch_url",
+        "description": "Fetch content from a URL and return it as text.",
+        "parameters": [
+          {"name": "url", "type": "string", "required": true, "description": "The URL to fetch"},
+          {"name": "headers", "type": "object", "required": false, "description": "Additional headers to send"},
+          {"name": "timeout", "type": "integer", "required": false, "description": "Request timeout in seconds"}
+        ],
+        "returns": {"type": "string", "example": "<!DOCTYPE html><html><head><title>Example</title>..."}
+      },
+      {
+        "name": "fetch_json",
+        "description": "Fetch JSON from a URL, parse it, and return it formatted.",
+        "parameters": [
+          {"name": "url", "type": "string", "required": true, "description": "The URL to fetch JSON from"},
+          {"name": "headers", "type": "object", "required": false, "description": "Additional headers to send"},
+          {"name": "timeout", "type": "integer", "required": false, "description": "Request timeout in seconds"}
+        ],
+        "returns": {"type": "string", "example": "{\n  \"status\": \"ok\",\n  \"data\": {...}\n}"}
+      }
+    ]
+  },
+  {
+    "server_name": "google_search",
+    "server_index": 10,
+    "description": "Google search (requires API key)",
+    "requires_key": true,
+    "env_key": "SERP_API_KEY",
+    "tools": [
+      {
+        "name": "search",
+        "description": "Execute a Google search using Serper API.",
+        "parameters": [
+          {"name": "query", "type": "string", "required": true, "description": "The search query string"},
+          {"name": "location", "type": "string", "required": false, "description": "Location for the search query"},
+          {"name": "num_items", "type": "integer", "required": false, "description": "Maximum number of results (default 20)"}
+        ],
+        "returns": {"type": "array", "example": [{"position": 1, "title": "Example Result", "snippet": "This is a search result...", "link": "https://example.com"}]}
+      }
+    ]
+  },
+  {
+    "server_name": "google_maps",
+    "server_index": 11,
+    "description": "Google Maps (requires API key)",
+    "requires_key": true,
+    "env_key": "GOOGLE_MAPS_API_KEY",
+    "tools": [
+      {
+        "name": "maps_geocode",
+        "description": "Convert an address into geographic coordinates.",
+        "parameters": [
+          {"name": "address", "type": "string", "required": true, "description": "The address to geocode"}
+        ],
+        "returns": {"type": "object", "example": {"location": {"lat": 37.7749, "lng": -122.4194}, "formatted_address": "San Francisco, CA, USA"}}
+      },
+      {
+        "name": "maps_reverse_geocode",
+        "description": "Convert coordinates into an address.",
+        "parameters": [
+          {"name": "latitude", "type": "number", "required": true, "description": "Latitude coordinate"},
+          {"name": "longitude", "type": "number", "required": true, "description": "Longitude coordinate"}
+        ],
+        "returns": {"type": "object", "example": {"formatted_address": "1 Market St, San Francisco, CA 94105, USA"}}
+      },
+      {
+        "name": "maps_search_places",
+        "description": "Search for places using Google Places API.",
+        "parameters": [
+          {"name": "query", "type": "string", "required": true, "description": "Search query"},
+          {"name": "location", "type": "object", "required": false, "description": "Center point for search"},
+          {"name": "radius", "type": "integer", "required": false, "description": "Search radius in meters"}
+        ],
+        "returns": {"type": "object", "example": {"places": [{"name": "Coffee Shop", "formatted_address": "123 Main St"}]}}
+      },
+      {
+        "name": "maps_directions",
+        "description": "Get directions between two points.",
+        "parameters": [
+          {"name": "origin", "type": "string", "required": true, "description": "Starting point address"},
+          {"name": "destination", "type": "string", "required": true, "description": "Ending point address"},
+          {"name": "mode", "type": "string", "required": false, "description": "Travel mode (drive, walk, bicycle, transit)"}
+        ],
+        "returns": {"type": "object", "example": {"routes": [{"distanceMeters": 5000, "duration": "15 mins"}]}}
+      },
+      {
+        "name": "maps_distance_matrix",
+        "description": "Calculate travel distance and time for multiple origins and destinations.",
+        "parameters": [
+          {"name": "origins", "type": "array", "required": true, "description": "Array of origin addresses"},
+          {"name": "destinations", "type": "array", "required": true, "description": "Array of destination addresses"},
+          {"name": "mode", "type": "string", "required": false, "description": "Travel mode"}
+        ],
+        "returns": {"type": "object", "example": {"results": [{"elements": [{"distance": {"text": "5 km"}, "duration": {"text": "15 mins"}}]}]}}
+      }
+    ]
+  },
+  {
+    "server_name": "google_sheets",
+    "server_index": 12,
+    "description": "Google Sheets (requires service account)",
+    "requires_key": true,
+    "env_key": "SERVICE_ACCOUNT_PATH",
+    "tools": [
+      {
+        "name": "get_sheet_data",
+        "description": "Get data from a specific sheet in a Google Spreadsheet.",
+        "parameters": [
+          {"name": "spreadsheet_id", "type": "string", "required": true, "description": "The ID of the spreadsheet"},
+          {"name": "sheet", "type": "string", "required": true, "description": "The name of the sheet"},
+          {"name": "range", "type": "string", "required": false, "description": "Cell range in A1 notation"}
+        ],
+        "returns": {"type": "array", "example": [["Name", "Age"], ["Alice", 30], ["Bob", 25]]}
+      },
+      {
+        "name": "update_cells",
+        "description": "Update cells in a Google Spreadsheet.",
+        "parameters": [
+          {"name": "spreadsheet_id", "type": "string", "required": true, "description": "The ID of the spreadsheet"},
+          {"name": "sheet", "type": "string", "required": true, "description": "The name of the sheet"},
+          {"name": "range", "type": "string", "required": true, "description": "Cell range in A1 notation"},
+          {"name": "data", "type": "array", "required": true, "description": "2D array of values to update"}
+        ],
+        "returns": {"type": "object", "example": {"updatedCells": 10, "updatedRows": 5}}
+      },
+      {
+        "name": "list_sheets",
+        "description": "List all sheets in a Google Spreadsheet.",
+        "parameters": [
+          {"name": "spreadsheet_id", "type": "string", "required": true, "description": "The ID of the spreadsheet"}
+        ],
+        "returns": {"type": "array", "example": ["Sheet1", "Sheet2", "Data"]}
+      },
+      {
+        "name": "create_spreadsheet",
+        "description": "Create a new Google Spreadsheet.",
+        "parameters": [
+          {"name": "title", "type": "string", "required": true, "description": "The title of the new spreadsheet"}
+        ],
+        "returns": {"type": "object", "example": {"spreadsheetId": "abc123", "title": "My Spreadsheet"}}
+      },
+      {
+        "name": "list_spreadsheets",
+        "description": "List all spreadsheets in the configured Google Drive folder.",
+        "parameters": [],
+        "returns": {"type": "array", "example": [{"id": "abc123", "title": "Budget 2024"}, {"id": "def456", "title": "Project Plan"}]}
+      }
+    ]
+  }
+]

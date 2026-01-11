@@ -9,7 +9,7 @@ import sys
 import time
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -20,6 +20,16 @@ from mcpshield.agents.main_agent import MainAgent
 from mcpshield.client import MCPClient
 from mcpshield.shield import MCPShield, MCPShieldDeny
 
+@runtime_checkable
+class ServerToolsProtocol(Protocol):
+    """实现两个方法就可以，不过严格检查了."""
+    
+    def fetch_manifest(self) -> dict:
+
+        ...
+    
+    def invoke(self, tool_name: str, args: dict, invocation_ctx: dict | None = None) -> Any:
+        ...
 
 def load_env(path: Path) -> None:
     if not path.exists():
@@ -49,7 +59,12 @@ def write_jsonl_line(path: Path, record: dict) -> None:
         handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
-def load_server(server_id: str) -> Any:
+def load_servers(server_id: str) -> list[Any]:
+    """Load server(s) from a server_id.
+    
+    Returns a list of server instances. Most servers return a single instance,
+    but some (like mcpsafety) return multiple servers.
+    """
     base_dirs = [
         ROOT / "experiments" / "benign_servers",
         ROOT / "experiments" / "attackers",
@@ -70,11 +85,57 @@ def load_server(server_id: str) -> Any:
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
 
+    server_or_servers = None
     if hasattr(module, "build_server"):
-        return module.build_server()
-    if hasattr(module, "make_server"):
-        return module.make_server()
-    raise AttributeError("Server module must provide build_server() or make_server().")
+        server_or_servers = module.build_server()
+    elif hasattr(module, "make_server"):
+        server_or_servers = module.make_server()
+    else:
+        raise AttributeError("Server module must provide build_server() or make_server().")
+    
+    # Normalize to list
+    if isinstance(server_or_servers, list):
+        return server_or_servers
+    else:
+        return [server_or_servers]
+
+
+class MultiServerClient:
+    """包装多个server为统一工具接口 - 满足 ServerToolsProtocol（结构化类型）."""
+    
+    def __init__(self, servers: list[Any]):
+        self.servers = servers
+        self._tools_cache = None
+    
+    def fetch_manifest(self) -> dict:
+        """Merge all server manifests into one."""
+        if self._tools_cache is not None:
+            return {"tools": self._tools_cache}
+        
+        all_tools = []
+        for server in self.servers:
+            manifest = server.fetch_manifest()
+            tools = manifest.get("tools", [])
+            all_tools.extend(tools)
+        
+        self._tools_cache = all_tools
+        return {"tools": all_tools}
+    
+    def invoke(self, tool_name: str, args: dict, invocation_ctx: dict | None = None) -> Any:
+        """Find the server that has this tool and invoke it."""
+        for server in self.servers:
+            manifest = server.fetch_manifest()
+            tool_names = {tool["name"] for tool in manifest.get("tools", [])}
+            if tool_name in tool_names:
+                # Check if server supports invocation_ctx parameter
+                import inspect
+                sig = inspect.signature(server.invoke)
+                if "invocation_ctx" in sig.parameters:
+                    return server.invoke(tool_name, args, invocation_ctx)
+                else:
+                    return server.invoke(tool_name, args)
+        
+        raise ValueError(f"Tool '{tool_name}' not found in any server")
 
 
 def ensure_output_dir(exp_id: str, output_root: str) -> Path:
@@ -144,8 +205,11 @@ def run_exp(exp_path: Path) -> Path:
         deny = None
         try:
             if server_id:
-                server = load_server(server_id)
-                client = MCPClient(server)
+                servers = load_servers(server_id)
+                if len(servers) > 1:
+                    client = MultiServerClient(servers)
+                else:
+                    client = MCPClient(servers[0])
                 if shield_enabled:
                     tools = MCPShield(
                         client,
