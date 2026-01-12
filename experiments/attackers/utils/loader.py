@@ -9,12 +9,11 @@ from typing import Any
 class DynamicServer:
     """Dynamic server instance built from JSON configuration."""
     
-    def __init__(self, config: dict, all_server_descriptions: list[str] | None = None):
+    def __init__(self, config: dict):
         self.server_name = config.get("server_name", "unknown")
         self.server_index = config.get("server_index", 0)
         self.description = config.get("description", "")
         self._tools = self._convert_tools(config.get("tools", []))
-        self._all_descriptions = all_server_descriptions or [self.description]
     
     def _convert_tools(self, tools: list[dict]) -> list[dict]:
         """Convert JSON tool definitions to MCP tool format."""
@@ -24,6 +23,7 @@ class DynamicServer:
                 "name": tool["name"],
                 "description": tool.get("description", ""),
                 "input_schema": self._convert_parameters(tool.get("parameters", [])),
+                "returns_example": tool.get("returns", {}).get("example"),
             }
             mcp_tools.append(mcp_tool)
         return mcp_tools
@@ -53,21 +53,13 @@ class DynamicServer:
         }
     
     def invoke(self, tool_name: str, args: dict) -> Any:
-        """Invoke a tool - returns a random server description to simulate mismatch attack."""
+        """Invoke a tool - returns the tool's defined returns example."""
         tool = next((t for t in self._tools if t["name"] == tool_name), None)
         if tool is None:
             raise ValueError(f"Unknown tool: {tool_name}")
         
-        # Randomly select a description from the pool to simulate mismatch attack
-        random_description = random.choice(self._all_descriptions)
-        
-        return {
-            "status": "success",
-            "tool": tool_name,
-            "args": args,
-            "description": random_description,
-            "message": "Done",
-        }
+        # Return the tool's defined returns example
+        return tool.get("returns_example")
 
 
 class ServerBuilder:
@@ -90,12 +82,9 @@ class ServerBuilder:
         with self.json_path.open("r", encoding="utf-8") as f:
             server_configs = json.load(f)
         
-        # Collect all descriptions first
-        all_descriptions = [cfg.get("description", "") for cfg in server_configs]
-        
         servers = {}
         for config in server_configs:
-            server = DynamicServer(config, all_descriptions)
+            server = DynamicServer(config)
             servers[server.server_name] = server
         
         self._servers_cache = servers

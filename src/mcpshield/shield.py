@@ -6,6 +6,7 @@ import builtins
 import io
 import json
 import os
+import platform
 import socket
 import subprocess
 import time
@@ -652,6 +653,13 @@ class MCPShield:
         }
 
     def _run_exec(self, tool_name: str, args: dict, invocation_ctx: dict | None = None) -> Any:
+<<<<<<< HEAD
+=======
+<<<<<<< Updated upstream
+        # TODO: add execution stage instrumentation later.
+        return self._client.invoke(tool_name, args, invocation_ctx)
+=======
+>>>>>>> feat/stage1ok
         run_ctx = {}
         if invocation_ctx and isinstance(invocation_ctx, dict):
             run_ctx = invocation_ctx.get("run_ctx", {}) or {}
@@ -677,7 +685,11 @@ class MCPShield:
             "analysis_raw": None,
             "allowlist_source": "config",
         }
+<<<<<<< HEAD
         if trace_mode != "py":
+=======
+        if trace_mode not in ("py", "dtrace"):
+>>>>>>> feat/stage1ok
             exec_log["trace_note"] = "trace_mode not implemented; using py"
 
         if not sandbox_enabled or workspace_dir is None:
@@ -703,6 +715,23 @@ class MCPShield:
             events=events,
         )
 
+<<<<<<< HEAD
+=======
+        dtrace_proc = None
+        dtrace_path = None
+        dtrace_error = None
+        if trace_mode.lower() == "dtrace":
+            dtrace_path = Path(workspace_dir) / "dtrace.log"
+            dtrace_proc, dtrace_error = self._start_dtrace(dtrace_path)
+            if dtrace_proc:
+                exec_log["trace_mode_used"] = "py+dtrace"
+                exec_log["dtrace_log"] = str(dtrace_path)
+            else:
+                exec_log["trace_mode_used"] = "py"
+                exec_log["dtrace_error"] = dtrace_error
+        exec_log["trace_mode_used"] = exec_log.get("trace_mode_used", "py")
+
+>>>>>>> feat/stage1ok
         try:
             prev_cwd = Path.cwd()
             os.chdir(workspace_dir)
@@ -727,6 +756,32 @@ class MCPShield:
                 os.chdir(prev_cwd)
             except Exception:
                 pass
+<<<<<<< HEAD
+=======
+            if dtrace_proc:
+                try:
+                    dtrace_proc.terminate()
+                    dtrace_proc.wait(timeout=2)
+                    if dtrace_proc.returncode not in (0, None):
+                        try:
+                            stderr_data = dtrace_proc.stderr.read() if dtrace_proc.stderr else b""
+                            if stderr_data:
+                                exec_log["dtrace_error"] = stderr_data.decode("utf-8", errors="ignore").strip()
+                        except Exception:
+                            pass
+                    try:
+                        if dtrace_path:
+                            if not dtrace_path.exists():
+                                exec_log["dtrace_error"] = exec_log.get("dtrace_error") or "dtrace_log_missing"
+                            else:
+                                size = dtrace_path.stat().st_size
+                                if size == 0:
+                                    exec_log["dtrace_empty"] = True
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+>>>>>>> feat/stage1ok
 
         analysis_raw, analysis = self._run_exec_analysis(events, tool_name, args, server_id)
         exec_log["analysis_raw"] = analysis_raw
@@ -748,6 +803,10 @@ class MCPShield:
                 exec_event=primary_event,
             )
         return result
+<<<<<<< HEAD
+=======
+>>>>>>> Stashed changes
+>>>>>>> feat/stage1ok
 
     def _run_post(self) -> None:
         # TODO: add post-invocation logic later.
@@ -769,6 +828,11 @@ class MCPShield:
                 text = "\n".join(lines[1:-1]).strip()
         return json.loads(text)
 
+<<<<<<< HEAD
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> feat/stage1ok
     def _resolve_allowed_domains(
         self,
         query: str,
@@ -821,6 +885,30 @@ class MCPShield:
             payload = None
         return raw, payload
 
+<<<<<<< HEAD
+=======
+    def _start_dtrace(self, trace_path: Path) -> tuple[subprocess.Popen | None, str | None]:
+        """Best-effort dtrace for macOS; returns (proc, error)."""
+        if platform.system().lower() != "darwin":
+            return None, "dtrace_supported_only_on_darwin"
+        try:
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            script = (
+                'syscall::open*:entry { printf("%s OPEN %s\\n", execname, copyinstr(arg0)); }\n'
+                'syscall::unlink*:entry { printf("%s UNLINK %s\\n", execname, copyinstr(arg0)); }\n'
+                'syscall::rename*:entry { printf("%s RENAME %s -> %s\\n", execname, copyinstr(arg0), copyinstr(arg1)); }\n'
+            )
+            proc = subprocess.Popen(
+                ["dtrace", "-q", "-o", str(trace_path), "-n", script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            return proc, None
+        except Exception as exc:
+            return None, f"dtrace_start_failed: {exc}"
+
+>>>>>>> Stashed changes
+>>>>>>> feat/stage1ok
     def _compute_deny_score(self, mock_results: list[dict[str, Any]]) -> float:
         # TODO: replace this heuristic with a richer scoring model.
         total = 0
