@@ -10,8 +10,8 @@ class BaseAgent(ABC):
     def __init__(self) -> None:
         self.tools: Any | None = None
         self._invocation_counter = 0
-        self.stage1_whitelist: set[str] = set()
-        self.stage1_blacklist: set[str] = set()
+        self.server_whitelist: set[str] = set()
+        self.server_blacklist: set[str] = set()
 
     @abstractmethod
     def run(self, task: str, run_ctx: dict) -> Any:

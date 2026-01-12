@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import builtins
+import io
 import json
+import os
+import socket
+import subprocess
+import time
+from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
 from .client import MCPClient
 from .prompts.stage1 import build_eval_prompt, build_mock_prompt
+from .prompts.stage2 import build_allowlist_prompt, build_exec_analysis_prompt
 
 
 @runtime_checkable
@@ -29,14 +37,423 @@ class MCPShieldDeny(Exception):
         self,
         server_id: str,
         reason: str,
+        *,
+        deny_stage: str = "PRE",
         pre_log: dict | None = None,
         mock_matrix: list[dict[str, Any]] | None = None,
+        exec_event: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(reason)
         self.server_id = server_id
         self.reason = reason
+        self.deny_stage = deny_stage
         self.pre_log = pre_log
         self.mock_matrix = mock_matrix or []
+        self.exec_event = exec_event
+
+
+class SandboxViolation(Exception):
+    def __init__(self, reason: str, event: dict[str, Any]) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.event = event
+
+
+class SandboxGuard:
+    def __init__(
+        self,
+        *,
+        workspace_dir: Path,
+        allowed_paths: list[Path],
+        allowed_domains: list[str],
+        events: list[dict[str, Any]],
+    ) -> None:
+        self.workspace_dir = workspace_dir
+        self.allowed_paths = allowed_paths
+        self.allowed_domains = [domain.lower().strip(".") for domain in allowed_domains]
+        self.events = events
+        self._orig: dict[str, Any] = {}
+
+    def __enter__(self) -> "SandboxGuard":
+        self._install()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self._restore()
+        return False
+
+    def _record_event(
+        self,
+        event_type: str,
+        *,
+        target: str,
+        allowed: bool,
+        reason: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event = {
+            "ts": time.time(),
+            "type": event_type,
+            "target": target,
+            "allowed": allowed,
+            "reason": reason,
+        }
+        if details:
+            event["details"] = details
+        self.events.append(event)
+        return event
+
+    def _resolve_path(self, value: Any) -> Path | None:
+        if value is None:
+            return None
+        if isinstance(value, Path):
+            return value
+        try:
+            return Path(value)
+        except Exception:
+            return None
+
+    def _is_under(self, path: Path, root: Path) -> bool:
+        try:
+            path.resolve().relative_to(root.resolve())
+            return True
+        except Exception:
+            return False
+
+    def _allow_read(self, path: Path) -> bool:
+        resolved = path.resolve()
+        if self._is_under(resolved, self.workspace_dir):
+            return True
+        for allowed in self.allowed_paths:
+            if self._is_under(resolved, allowed):
+                return True
+        return False
+
+    def _allow_write(self, path: Path) -> bool:
+        resolved = path.resolve()
+        return self._is_under(resolved, self.workspace_dir)
+
+    def _allow_domain(self, host: str) -> bool:
+        if not self.allowed_domains:
+            return False
+        host = host.lower().strip(".")
+        for domain in self.allowed_domains:
+            if host == domain or host.endswith(f".{domain}"):
+                return True
+        return False
+
+    def _install(self) -> None:
+        self._orig["open"] = builtins.open
+        self._orig["io_open"] = io.open
+
+        def guarded_open(file, mode="r", *args, **kwargs):
+            if isinstance(file, int):
+                return self._orig["open"](file, mode, *args, **kwargs)
+            path = self._resolve_path(file)
+            if path is None:
+                return self._orig["open"](file, mode, *args, **kwargs)
+            is_write = any(ch in mode for ch in ("w", "a", "x", "+"))
+            if is_write:
+                allowed = self._allow_write(path)
+                event = self._record_event(
+                    "file_write",
+                    target=str(path),
+                    allowed=allowed,
+                    reason=None if allowed else "write_outside_workspace",
+                    details={"mode": mode},
+                )
+                if not allowed:
+                    raise SandboxViolation("File write outside workspace", event)
+            else:
+                allowed = self._allow_read(path)
+                event = self._record_event(
+                    "file_read",
+                    target=str(path),
+                    allowed=allowed,
+                    reason=None if allowed else "read_outside_allowed_paths",
+                    details={"mode": mode},
+                )
+                if not allowed:
+                    raise SandboxViolation("File read outside allowed paths", event)
+            return self._orig["open"](file, mode, *args, **kwargs)
+
+        builtins.open = guarded_open
+        io.open = guarded_open
+
+        self._orig["os_remove"] = os.remove
+        self._orig["os_unlink"] = os.unlink
+        self._orig["os_rmdir"] = os.rmdir
+        self._orig["os_rename"] = os.rename
+        self._orig["os_replace"] = os.replace
+        self._orig["os_mkdir"] = os.mkdir
+        self._orig["os_makedirs"] = os.makedirs
+
+        def guarded_delete(func_name: str, path, *args, **kwargs):
+            target = self._resolve_path(path)
+            if target is None:
+                return self._orig[func_name](path, *args, **kwargs)
+            allowed = self._allow_write(target)
+            event = self._record_event(
+                "file_delete",
+                target=str(target),
+                allowed=allowed,
+                reason=None if allowed else "delete_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("File delete outside workspace", event)
+            return self._orig[func_name](path, *args, **kwargs)
+
+        os.remove = lambda path, *args, **kwargs: guarded_delete("os_remove", path, *args, **kwargs)
+        os.unlink = lambda path, *args, **kwargs: guarded_delete("os_unlink", path, *args, **kwargs)
+        os.rmdir = lambda path, *args, **kwargs: guarded_delete("os_rmdir", path, *args, **kwargs)
+
+        def guarded_rename(func_name: str, src, dst, *args, **kwargs):
+            src_path = self._resolve_path(src)
+            dst_path = self._resolve_path(dst)
+            if src_path is None or dst_path is None:
+                return self._orig[func_name](src, dst, *args, **kwargs)
+            allowed = self._allow_write(src_path) and self._allow_write(dst_path)
+            event = self._record_event(
+                "file_rename",
+                target=f"{src_path} -> {dst_path}",
+                allowed=allowed,
+                reason=None if allowed else "rename_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("File rename outside workspace", event)
+            return self._orig[func_name](src, dst, *args, **kwargs)
+
+        os.rename = lambda src, dst, *args, **kwargs: guarded_rename(
+            "os_rename", src, dst, *args, **kwargs
+        )
+        os.replace = lambda src, dst, *args, **kwargs: guarded_rename(
+            "os_replace", src, dst, *args, **kwargs
+        )
+
+        def guarded_mkdir(path, *args, **kwargs):
+            target = self._resolve_path(path)
+            if target is None:
+                return self._orig["os_mkdir"](path, *args, **kwargs)
+            allowed = self._allow_write(target)
+            event = self._record_event(
+                "file_mkdir",
+                target=str(target),
+                allowed=allowed,
+                reason=None if allowed else "mkdir_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("Mkdir outside workspace", event)
+            return self._orig["os_mkdir"](path, *args, **kwargs)
+
+        os.mkdir = guarded_mkdir
+
+        def guarded_makedirs(name, *args, **kwargs):
+            target = self._resolve_path(name)
+            if target is None:
+                return self._orig["os_makedirs"](name, *args, **kwargs)
+            allowed = self._allow_write(target)
+            event = self._record_event(
+                "file_mkdirs",
+                target=str(target),
+                allowed=allowed,
+                reason=None if allowed else "mkdirs_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("Makedirs outside workspace", event)
+            return self._orig["os_makedirs"](name, *args, **kwargs)
+
+        os.makedirs = guarded_makedirs
+
+        import shutil
+
+        self._orig["shutil_rmtree"] = shutil.rmtree
+        self._orig["shutil_move"] = shutil.move
+        self._orig["shutil_copy"] = shutil.copy
+        self._orig["shutil_copy2"] = shutil.copy2
+        self._orig["shutil_copytree"] = shutil.copytree
+
+        def guarded_rmtree(path, *args, **kwargs):
+            target = self._resolve_path(path)
+            if target is None:
+                return self._orig["shutil_rmtree"](path, *args, **kwargs)
+            allowed = self._allow_write(target)
+            event = self._record_event(
+                "file_rmtree",
+                target=str(target),
+                allowed=allowed,
+                reason=None if allowed else "rmtree_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("Rmtree outside workspace", event)
+            return self._orig["shutil_rmtree"](path, *args, **kwargs)
+
+        def guarded_move(src, dst, *args, **kwargs):
+            src_path = self._resolve_path(src)
+            dst_path = self._resolve_path(dst)
+            if src_path is None or dst_path is None:
+                return self._orig["shutil_move"](src, dst, *args, **kwargs)
+            allowed = self._allow_write(src_path) and self._allow_write(dst_path)
+            event = self._record_event(
+                "file_move",
+                target=f"{src_path} -> {dst_path}",
+                allowed=allowed,
+                reason=None if allowed else "move_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("Move outside workspace", event)
+            return self._orig["shutil_move"](src, dst, *args, **kwargs)
+
+        def guarded_copy(src, dst, *args, **kwargs):
+            src_path = self._resolve_path(src)
+            dst_path = self._resolve_path(dst)
+            if src_path is None or dst_path is None:
+                return self._orig["shutil_copy"](src, dst, *args, **kwargs)
+            allowed = self._allow_read(src_path) and self._allow_write(dst_path)
+            event = self._record_event(
+                "file_copy",
+                target=f"{src_path} -> {dst_path}",
+                allowed=allowed,
+                reason=None if allowed else "copy_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("Copy outside workspace", event)
+            return self._orig["shutil_copy"](src, dst, *args, **kwargs)
+
+        def guarded_copy2(src, dst, *args, **kwargs):
+            return guarded_copy(src, dst, *args, **kwargs)
+
+        def guarded_copytree(src, dst, *args, **kwargs):
+            src_path = self._resolve_path(src)
+            dst_path = self._resolve_path(dst)
+            if src_path is None or dst_path is None:
+                return self._orig["shutil_copytree"](src, dst, *args, **kwargs)
+            allowed = self._allow_read(src_path) and self._allow_write(dst_path)
+            event = self._record_event(
+                "file_copytree",
+                target=f"{src_path} -> {dst_path}",
+                allowed=allowed,
+                reason=None if allowed else "copytree_outside_workspace",
+            )
+            if not allowed:
+                raise SandboxViolation("Copytree outside workspace", event)
+            return self._orig["shutil_copytree"](src, dst, *args, **kwargs)
+
+        shutil.rmtree = guarded_rmtree
+        shutil.move = guarded_move
+        shutil.copy = guarded_copy
+        shutil.copy2 = guarded_copy2
+        shutil.copytree = guarded_copytree
+
+        self._orig["subprocess_popen"] = subprocess.Popen
+        self._orig["os_system"] = os.system
+
+        def guarded_popen(*args, **kwargs):
+            event = self._record_event(
+                "subprocess",
+                target=str(args[0]) if args else "subprocess",
+                allowed=False,
+                reason="subprocess_blocked",
+            )
+            raise SandboxViolation("Subprocess blocked in sandbox", event)
+
+        def guarded_system(command):
+            event = self._record_event(
+                "system_call",
+                target=str(command),
+                allowed=False,
+                reason="os_system_blocked",
+            )
+            raise SandboxViolation("os.system blocked in sandbox", event)
+
+        subprocess.Popen = guarded_popen
+        os.system = guarded_system
+
+        self._orig["socket_create_connection"] = socket.create_connection
+        self._orig["socket_connect"] = socket.socket.connect
+
+        def guarded_create_connection(address, *args, **kwargs):
+            host = None
+            if isinstance(address, tuple) and address:
+                host = address[0]
+            host = host or "unknown"
+            allowed = self._allow_domain(str(host))
+            event = self._record_event(
+                "network_connect",
+                target=str(host),
+                allowed=allowed,
+                reason=None if allowed else "domain_not_allowed",
+            )
+            if not allowed:
+                raise SandboxViolation("Network domain not allowed", event)
+            return self._orig["socket_create_connection"](address, *args, **kwargs)
+
+        def guarded_socket_connect(sock, address):
+            host = None
+            if isinstance(address, tuple) and address:
+                host = address[0]
+            host = host or "unknown"
+            allowed = self._allow_domain(str(host))
+            event = self._record_event(
+                "network_connect",
+                target=str(host),
+                allowed=allowed,
+                reason=None if allowed else "domain_not_allowed",
+            )
+            if not allowed:
+                raise SandboxViolation("Network domain not allowed", event)
+            return self._orig["socket_connect"](sock, address)
+
+        socket.create_connection = guarded_create_connection
+        socket.socket.connect = guarded_socket_connect
+
+    def _restore(self) -> None:
+        for name, value in self._orig.items():
+            if name == "open":
+                builtins.open = value
+            elif name == "io_open":
+                io.open = value
+            elif name == "os_remove":
+                os.remove = value
+            elif name == "os_unlink":
+                os.unlink = value
+            elif name == "os_rmdir":
+                os.rmdir = value
+            elif name == "os_rename":
+                os.rename = value
+            elif name == "os_replace":
+                os.replace = value
+            elif name == "os_mkdir":
+                os.mkdir = value
+            elif name == "os_makedirs":
+                os.makedirs = value
+            elif name == "shutil_rmtree":
+                import shutil
+
+                shutil.rmtree = value
+            elif name == "shutil_move":
+                import shutil
+
+                shutil.move = value
+            elif name == "shutil_copy":
+                import shutil
+
+                shutil.copy = value
+            elif name == "shutil_copy2":
+                import shutil
+
+                shutil.copy2 = value
+            elif name == "shutil_copytree":
+                import shutil
+
+                shutil.copytree = value
+            elif name == "subprocess_popen":
+                subprocess.Popen = value
+            elif name == "os_system":
+                os.system = value
+            elif name == "socket_create_connection":
+                socket.create_connection = value
+            elif name == "socket_connect":
+                socket.socket.connect = value
 
 
 class MCPShield:
@@ -55,6 +472,8 @@ class MCPShield:
         whitelist: set[str] | None = None,
         blacklist: set[str] | None = None,
         pre_logs: list[dict] | None = None,
+        exec_logs: list[dict] | None = None,
+        sandbox_cfg: dict | None = None,
     ) -> None:
         self._client = client
         self._pre_enabled = pre_enabled
@@ -65,13 +484,18 @@ class MCPShield:
         self._whitelist = whitelist if whitelist is not None else set()
         self._blacklist = blacklist if blacklist is not None else set()
         self._blacklist_reason: dict[str, str] = {}
+        self._exec_whitelist = self._whitelist
+        self._exec_blacklist = self._blacklist
+        self._exec_blacklist_reason: dict[str, str] = {}
         self._pre_logs = pre_logs if pre_logs is not None else []
+        self._exec_logs = exec_logs if exec_logs is not None else []
+        self._sandbox_cfg = sandbox_cfg or {}
 
         self._llm = None
         self._model = model
-        if self._pre_enabled:
+        if self._pre_enabled or self._exec_enabled:
             if not model or not base_url or not api_key:
-                raise RuntimeError("MCPShield pre requires model/base_url/api_key")
+                raise RuntimeError("MCPShield requires model/base_url/api_key")
             try:
                 from openai import OpenAI  # type: ignore
             except Exception as exc:
@@ -89,7 +513,7 @@ class MCPShield:
 
         if self._pre_enabled and server_id and server_id in self._blacklist:
             reason = self._blacklist_reason.get(server_id, "MCPShield deny (blacklist).")
-            raise MCPShieldDeny(server_id, reason)
+            raise MCPShieldDeny(server_id, reason, deny_stage="PRE")
 
         if self._pre_enabled and server_id and server_id not in self._whitelist:
             pre_log = self._run_pre(server_id)
@@ -99,11 +523,27 @@ class MCPShield:
                 reason = pre_log.get("reason", "MCPShield deny")
                 self._blacklist_reason[server_id] = reason
                 matrix = self._build_mock_matrix(pre_log.get("mock_results", []))
-                raise MCPShieldDeny(server_id, reason, pre_log=pre_log, mock_matrix=matrix)
+                raise MCPShieldDeny(
+                    server_id,
+                    reason,
+                    deny_stage="PRE",
+                    pre_log=pre_log,
+                    mock_matrix=matrix,
+                )
             self._whitelist.add(server_id)
 
         if self._exec_enabled:
-            result = self._run_exec(tool_name, args, invocation_ctx)
+            if server_id and server_id in self._exec_blacklist:
+                reason = self._exec_blacklist_reason.get(
+                    server_id, "MCPShield deny (exec blacklist)."
+                )
+                raise MCPShieldDeny(server_id, reason, deny_stage="EXEC")
+            if server_id and server_id in self._exec_whitelist:
+                result = self._client.invoke(tool_name, args, invocation_ctx)
+            else:
+                result = self._run_exec(tool_name, args, invocation_ctx)
+                if server_id:
+                    self._exec_whitelist.add(server_id)
         else:
             result = self._client.invoke(tool_name, args, invocation_ctx)
 
@@ -212,8 +652,102 @@ class MCPShield:
         }
 
     def _run_exec(self, tool_name: str, args: dict, invocation_ctx: dict | None = None) -> Any:
-        # TODO: add execution stage instrumentation later.
-        return self._client.invoke(tool_name, args, invocation_ctx)
+        run_ctx = {}
+        if invocation_ctx and isinstance(invocation_ctx, dict):
+            run_ctx = invocation_ctx.get("run_ctx", {}) or {}
+        server_id = run_ctx.get("server_id")
+        query = run_ctx.get("query", "")
+        sandbox_enabled = bool(self._sandbox_cfg.get("enabled", True))
+        allowed_domains = list(self._sandbox_cfg.get("allowed_domains") or [])
+        allowed_paths = list(self._sandbox_cfg.get("allowed_paths") or [])
+        workspace_dir = self._sandbox_cfg.get("workspace_dir")
+        trace_mode = str(self._sandbox_cfg.get("trace_mode", "py"))
+
+        exec_log: dict[str, Any] = {
+            "server_id": server_id,
+            "tool_name": tool_name,
+            "arguments": args,
+            "allowed_domains": allowed_domains,
+            "allowed_paths": [str(path) for path in allowed_paths],
+            "workspace_dir": str(workspace_dir) if workspace_dir else None,
+            "trace_mode_requested": trace_mode,
+            "trace_mode_used": "py",
+            "events": [],
+            "analysis": None,
+            "analysis_raw": None,
+            "allowlist_source": "config",
+        }
+        if trace_mode != "py":
+            exec_log["trace_note"] = "trace_mode not implemented; using py"
+
+        if not sandbox_enabled or workspace_dir is None:
+            result = self._client.invoke(tool_name, args, invocation_ctx)
+            self._exec_logs.append(exec_log)
+            return result
+
+        manifest = self._client.fetch_manifest()
+        if not allowed_domains:
+            exec_log["allowlist_source"] = "llm"
+            allowed_domains, allowlist_raw, allowlist_error = self._resolve_allowed_domains(
+                query, tool_name, manifest, server_id
+            )
+            exec_log["allowed_domains"] = allowed_domains
+            exec_log["allowlist_raw"] = allowlist_raw
+            exec_log["allowlist_error"] = allowlist_error
+
+        events: list[dict[str, Any]] = exec_log["events"]
+        guard = SandboxGuard(
+            workspace_dir=Path(workspace_dir),
+            allowed_paths=[Path(path) for path in allowed_paths],
+            allowed_domains=allowed_domains,
+            events=events,
+        )
+
+        try:
+            prev_cwd = Path.cwd()
+            os.chdir(workspace_dir)
+            with guard:
+                result = self._client.invoke(tool_name, args, invocation_ctx)
+        except SandboxViolation as exc:
+            exec_log["denied"] = True
+            exec_log["deny_reason"] = exc.reason
+            exec_log["deny_event"] = exc.event
+            self._exec_logs.append(exec_log)
+            if server_id:
+                self._exec_blacklist.add(server_id)
+                self._exec_blacklist_reason[server_id] = exc.reason
+            raise MCPShieldDeny(
+                server_id or "unknown",
+                exc.reason,
+                deny_stage="EXEC",
+                exec_event=exc.event,
+            )
+        finally:
+            try:
+                os.chdir(prev_cwd)
+            except Exception:
+                pass
+
+        analysis_raw, analysis = self._run_exec_analysis(events, tool_name, args, server_id)
+        exec_log["analysis_raw"] = analysis_raw
+        exec_log["analysis"] = analysis
+        self._exec_logs.append(exec_log)
+        if analysis and not analysis.get("trusted", True):
+            reason = analysis.get("reason", "Stage2 analysis deny")
+            primary_event = events[0] if events else None
+            exec_log["denied"] = True
+            exec_log["deny_reason"] = reason
+            exec_log["deny_event"] = primary_event
+            if server_id:
+                self._exec_blacklist.add(server_id)
+                self._exec_blacklist_reason[server_id] = reason
+            raise MCPShieldDeny(
+                server_id or "unknown",
+                reason,
+                deny_stage="EXEC",
+                exec_event=primary_event,
+            )
+        return result
 
     def _run_post(self) -> None:
         # TODO: add post-invocation logic later.
@@ -234,6 +768,58 @@ class MCPShield:
             if len(lines) >= 3:
                 text = "\n".join(lines[1:-1]).strip()
         return json.loads(text)
+
+    def _resolve_allowed_domains(
+        self,
+        query: str,
+        tool_name: str,
+        manifest: dict[str, Any],
+        server_id: str | None,
+    ) -> tuple[list[str], str | None, str | None]:
+        if not self._llm:
+            return [], None, "llm_not_available"
+        system, user = build_allowlist_prompt(query, tool_name, manifest, server_id)
+        raw = self._llm.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0,
+        ).choices[0].message.content or ""
+        try:
+            payload = self._extract_json(raw)
+            allowed = payload.get("allowed_domains", [])
+            if not isinstance(allowed, list):
+                raise ValueError("allowed_domains is not a list")
+            cleaned = [str(domain).lower().strip(".") for domain in allowed if domain]
+            return cleaned, raw, None
+        except Exception as exc:
+            return [], raw, str(exc)
+
+    def _run_exec_analysis(
+        self,
+        execution_events: list[dict[str, Any]],
+        tool_name: str,
+        args: dict[str, Any],
+        server_id: str | None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        if not self._llm:
+            return None, None
+        system, user = build_exec_analysis_prompt(execution_events, tool_name, args, server_id)
+        raw = self._llm.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=0,
+        ).choices[0].message.content or ""
+        try:
+            payload = self._extract_json(raw)
+        except Exception:
+            payload = None
+        return raw, payload
 
     def _compute_deny_score(self, mock_results: list[dict[str, Any]]) -> float:
         # TODO: replace this heuristic with a richer scoring model.

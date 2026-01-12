@@ -59,6 +59,46 @@ def write_jsonl_line(path: Path, record: dict) -> None:
         handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
+def resolve_allowed_paths(base_dir: Path, paths: list[str] | None) -> list[Path]:
+    resolved: list[Path] = []
+    for item in paths or []:
+        path = Path(item)
+        if not path.is_absolute():
+            path = (base_dir / path).resolve()
+        else:
+            path = path.resolve()
+        resolved.append(path)
+    return resolved
+
+
+def make_workspace(out_dir: Path, run_id: str | None) -> Path:
+    workspaces_dir = out_dir / "workspaces"
+    workspaces_dir.mkdir(parents=True, exist_ok=True)
+    safe_name = str(run_id or f"run_{int(time.time() * 1000)}").replace(os.sep, "_")
+    workspace_dir = workspaces_dir / safe_name
+    workspace_dir.mkdir(parents=True, exist_ok=False)
+    return workspace_dir
+
+
+def link_inputs(workspace_dir: Path, allowed_paths: list[Path]) -> list[str]:
+    if not allowed_paths:
+        return []
+    inputs_dir = workspace_dir / "inputs"
+    inputs_dir.mkdir(parents=True, exist_ok=True)
+    linked = []
+    for idx, path in enumerate(allowed_paths):
+        name = path.name or f"path_{idx}"
+        link_path = inputs_dir / name
+        if link_path.exists():
+            link_path = inputs_dir / f"{name}_{idx}"
+        try:
+            os.symlink(path, link_path)
+            linked.append(str(link_path))
+        except Exception:
+            continue
+    return linked
+
+
 def load_servers(server_id: str) -> list[Any]:
     """Load server(s) from a server_id.
     
@@ -68,6 +108,9 @@ def load_servers(server_id: str) -> list[Any]:
     base_dirs = [
         ROOT / "experiments" / "benign_servers",
         ROOT / "experiments" / "attackers",
+        ROOT / "experiments" / "test" / "benign_servers",
+        ROOT / "experiments" / "test" / "attackers",
+        ROOT / "experiments" / "test",
     ]
     server_path = None
     for base in base_dirs:
@@ -177,18 +220,50 @@ def run_exp(exp_path: Path) -> Path:
     pre_mock_count = int(shield_cfg.get("pre_mock_count", 4))
     pre_deny_ratio = float(shield_cfg.get("pre_deny_ratio", 0.5))
 
-    agent.stage1_whitelist = set()
-    agent.stage1_blacklist = set()
+    sandbox_cfg = exp.get("sandbox", {})
+    sandbox_allowed_paths = resolve_allowed_paths(ROOT, sandbox_cfg.get("allowed_paths"))
+    sandbox_allowed_domains = list(sandbox_cfg.get("allowed_domains") or [])
+    sandbox_trace_mode = str(sandbox_cfg.get("trace_mode", "py"))
+    sandbox_persist = bool(sandbox_cfg.get("persist_workspace", True))
+    sandbox_link_inputs = bool(sandbox_cfg.get("link_inputs", True))
+
+    agent.server_whitelist = set()
+    agent.server_blacklist = set()
 
     for run_case in exp.get("runs", []):
         run_id = run_case.get("run_id")
         query = run_case.get("query")
         server_id = run_case.get("server_id")
         pre_logs: list[dict] = []
+        exec_logs: list[dict] = []
+        run_sandbox = run_case.get("sandbox", {})
+        run_allowed_domains = (
+            list(run_sandbox.get("allowed_domains") or [])
+            if "allowed_domains" in run_sandbox
+            else sandbox_allowed_domains
+        )
+        if "allowed_paths" in run_sandbox:
+            run_allowed_paths = resolve_allowed_paths(ROOT, run_sandbox.get("allowed_paths"))
+        else:
+            run_allowed_paths = sandbox_allowed_paths
+        workspace_dir = None
+        input_links: list[str] = []
+        if exec_enabled:
+            workspace_dir = make_workspace(out_dir, run_id)
+            if sandbox_link_inputs:
+                input_links = link_inputs(workspace_dir, run_allowed_paths)
         run_ctx = {
             "exp_id": exp_id,
             "run_id": run_id,
             "server_id": server_id,
+            "query": query,
+            "sandbox": {
+                "workspace_dir": str(workspace_dir) if workspace_dir else None,
+                "allowed_paths": [str(path) for path in run_allowed_paths],
+                "allowed_domains": run_allowed_domains,
+                "trace_mode": sandbox_trace_mode,
+                "input_links": input_links,
+            },
             "shield": {
                 "enabled": shield_enabled,
                 "pre": pre_enabled,
@@ -211,6 +286,12 @@ def run_exp(exp_path: Path) -> Path:
                 else:
                     client = MCPClient(servers[0])
                 if shield_enabled:
+                    sandbox_ctx = {
+                        "workspace_dir": workspace_dir,
+                        "allowed_paths": run_allowed_paths,
+                        "allowed_domains": run_allowed_domains,
+                        "trace_mode": sandbox_trace_mode,
+                    }
                     tools = MCPShield(
                         client,
                         pre_enabled=pre_enabled,
@@ -221,9 +302,11 @@ def run_exp(exp_path: Path) -> Path:
                         api_key=api_key,
                         pre_mock_count=pre_mock_count,
                         pre_deny_ratio=pre_deny_ratio,
-                        whitelist=agent.stage1_whitelist,
-                        blacklist=agent.stage1_blacklist,
+                        whitelist=agent.server_whitelist,
+                        blacklist=agent.server_blacklist,
                         pre_logs=pre_logs,
+                        exec_logs=exec_logs,
+                        sandbox_cfg=sandbox_ctx,
                     )
                 else:
                     tools = client
@@ -236,11 +319,16 @@ def run_exp(exp_path: Path) -> Path:
             deny = {
                 "server_id": exc.server_id,
                 "reason": exc.reason,
+                "deny_stage": exc.deny_stage,
                 "mock_matrix": exc.mock_matrix,
+                "exec_event": exc.exec_event,
             }
         except Exception as exc:
             ok = False
             error = str(exc)
+        finally:
+            if exec_enabled and workspace_dir and not sandbox_persist:
+                shutil.rmtree(workspace_dir, ignore_errors=True)
 
         record = {
             "run_id": run_id,
@@ -250,6 +338,7 @@ def run_exp(exp_path: Path) -> Path:
             "error": error,
             "output": output,
             "shield_pre": pre_logs if shield_enabled else None,
+            "shield_exec": exec_logs if shield_enabled else None,
             "deny": deny,
         }
         write_jsonl_line(out_dir / "run_records.jsonl", record)

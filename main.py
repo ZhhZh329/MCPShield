@@ -1,4 +1,4 @@
-"""Run MCPShield v2 with Stage1 enabled by default."""
+"""Run MCPShield v2 experiments."""
 
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ def run_exp_file(exp_path: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="MCPShield v2 (Stage1 enabled)")
+    parser = argparse.ArgumentParser(description="MCPShield v2 runner")
     parser.add_argument("--exp", type=Path, help="Run a single exp file")
     args = parser.parse_args(argv[1:])
 
-    default_exp = ROOT / "experiments" / "exp_attack.yaml"
+    default_exp = ROOT / "experiments" / "test" / "exp_attack.yaml"
     exp_path = args.exp or default_exp
     if not exp_path.exists():
         print(f"Missing exp file: {exp_path}")
