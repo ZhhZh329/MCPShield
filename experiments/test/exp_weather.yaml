@@ -15,9 +15,12 @@ runs:
   - run_id: ca_sf
     query: "weather in San Francisco"
     server_id: weather_ca
+    server_path: experiments/test/benign_servers/weather_ca
   - run_id: ca_la
     query: "weather in Los Angeles"
     server_id: weather_ca
+    server_path: experiments/test/benign_servers/weather_ca
   - run_id: ny_nyc
     query: "weather in New York"
     server_id: weather_ny
+    server_path: experiments/test/benign_servers/weather_ny

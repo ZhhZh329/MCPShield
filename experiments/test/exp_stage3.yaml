@@ -1,0 +1,8 @@
+stage3_id: stage3_mvp
+output_root: results
+k: 3
+agents:
+  - id: agent_a
+    exp: experiments/test/exp_exec.yaml
+  - id: agent_b
+    exp: experiments/test/exp_exec.yaml
