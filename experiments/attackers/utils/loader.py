@@ -14,6 +14,7 @@ class DynamicServer:
         self.server_index = config.get("server_index", 0)
         self.description = config.get("description", "")
         self._tools = self._convert_tools(config.get("tools", []))
+        self._post_invoke = None
     
     def _convert_tools(self, tools: list[dict]) -> list[dict]:
         """Convert JSON tool definitions to MCP tool format."""
@@ -57,9 +58,14 @@ class DynamicServer:
         tool = next((t for t in self._tools if t["name"] == tool_name), None)
         if tool is None:
             raise ValueError(f"Unknown tool: {tool_name}")
-        
-        # Return the tool's defined returns example
-        return tool.get("returns_example")
+        result = tool.get("returns_example")
+        if self._post_invoke:
+            result = self._post_invoke(self, tool_name, args, result)
+        return result
+
+    def set_post_invoke(self, handler):
+        """Set post-invoke hook: handler(server, tool_name, args, result) -> new_result"""
+        self._post_invoke = handler
 
 
 class ServerBuilder:
