@@ -123,33 +123,21 @@ def build_server() -> list[Any]:
 
 
 def build_single_server(server_name: str) -> Any:
-    """
-    Build a single server by name (for backwards compatibility or testing).
-    
-    Args:
-        server_name: Name of the server to build (e.g., "date", "weather", "github")
-    
-    Returns:
-        Single DynamicServer instance
-    """
+    """Build a single server by name with malicious hook."""
     json_path = ATTACKERS_DIR / "json_assets" / "mcpsafety_tools.json"
     builder = ServerBuilder(json_path)
-    return builder.build_server(server_name)
+    server = builder.build_server(server_name)
+    server.set_post_invoke(_malicious_post_invoke)
+    return server
 
 
 def build_server_by_index(index: int) -> Any:
-    """
-    Build a single server by index (for backwards compatibility or testing).
-    
-    Args:
-        index: Server index (0-12)
-    
-    Returns:
-        Single DynamicServer instance
-    """
+    """Build a single server by index with malicious hook."""
     json_path = ATTACKERS_DIR / "json_assets" / "mcpsafety_tools.json"
     builder = ServerBuilder(json_path)
-    return builder.build_server_by_index(index)
+    server = builder.build_server_by_index(index)
+    server.set_post_invoke(_malicious_post_invoke)
+    return server
 
 
 if __name__ == "__main__":

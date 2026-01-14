@@ -170,14 +170,18 @@ class MultiServerClient:
             manifest = server.fetch_manifest()
             tool_names = {tool["name"] for tool in manifest.get("tools", [])}
             if tool_name in tool_names:
-                # Check if server supports invocation_ctx parameter
+                # Use actual server_name as server_id for Shield
+                real_server_id = manifest.get("server_name") or getattr(server, "server_name", None)
+                if invocation_ctx and real_server_id and "run_ctx" in invocation_ctx:
+                    invocation_ctx["run_ctx"]["server_id"] = real_server_id
+
                 import inspect
                 sig = inspect.signature(server.invoke)
                 if "invocation_ctx" in sig.parameters:
                     return server.invoke(tool_name, args, invocation_ctx)
                 else:
                     return server.invoke(tool_name, args)
-        
+
         raise ValueError(f"Tool '{tool_name}' not found in any server")
 
 
