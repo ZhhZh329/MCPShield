@@ -9,7 +9,7 @@ import sys
 import time
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 ROOT = Path(__file__).resolve().parent
 SRC = ROOT / "src"
@@ -99,32 +99,42 @@ def link_inputs(workspace_dir: Path, allowed_paths: list[Path]) -> list[str]:
     return linked
 
 
-def load_servers(server_id: str) -> list[Any]:
-    """Load server(s) from a server_id.
+def load_servers(server_id: str, server_path: str | None = None) -> list[Any]:
+    """Load server(s) from a server_id or explicit server_path.
     
     Returns a list of server instances. Most servers return a single instance,
     but some (like mcpsafety) return multiple servers.
     """
-    base_dirs = [
-        ROOT / "experiments" / "benign_servers",
-        ROOT / "experiments" / "attackers",
-        ROOT / "experiments" / "test" / "benign_servers",
-        ROOT / "experiments" / "test" / "attackers",
-        ROOT / "experiments" / "test",
-    ]
-    server_path = None
-    for base in base_dirs:
-        candidate = base / server_id / "server.py"
-        if candidate.exists():
-            server_path = candidate
-            break
-    if server_path is None:
-        raise FileNotFoundError(f"server_id not found: {server_id}")
+    if server_path:
+        candidate = Path(server_path)
+        if not candidate.is_absolute():
+            candidate = (ROOT / candidate).resolve()
+        if candidate.is_dir():
+            candidate = candidate / "server.py"
+        if not candidate.exists():
+            raise FileNotFoundError(f"server_path not found: {candidate}")
+        server_path_obj = candidate
+    else:
+        base_dirs = [
+            ROOT / "experiments" / "benign_servers",
+            ROOT / "experiments" / "attackers",
+            ROOT / "experiments" / "test" / "benign_servers",
+            ROOT / "experiments" / "test" / "attackers",
+            ROOT / "experiments" / "test",
+        ]
+        server_path_obj = None
+        for base in base_dirs:
+            candidate = base / server_id / "server.py"
+            if candidate.exists():
+                server_path_obj = candidate
+                break
+        if server_path_obj is None:
+            raise FileNotFoundError(f"server_id not found: {server_id}")
 
     module_name = f"server_{server_id}"
-    spec = spec_from_file_location(module_name, server_path)
+    spec = spec_from_file_location(module_name, server_path_obj)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Unable to load server module: {server_path}")
+        raise RuntimeError(f"Unable to load server module: {server_path_obj}")
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
 
@@ -188,18 +198,25 @@ def ensure_output_dir(exp_id: str, output_root: str) -> Path:
     return out_dir
 
 
-def run_exp(exp_path: Path) -> Path:
-    load_env(ROOT / ".env")
-    exp = read_yaml(exp_path)
-
+def run_exp_with_agent(
+    exp_path: Path,
+    exp: dict,
+    agent: MainAgent,
+    out_dir: Path,
+    *,
+    record_hook: Callable[[dict, dict], None] | None = None,
+    copy_exp: bool = True,
+    agent_id: str | None = None,
+) -> Path:
     exp_id = exp["exp_id"]
-    output_root = exp.get("output_root", "results")
     log_level = exp.get("log_level")
     debug = exp.get("debug", False)
     if log_level is not None:
         debug = str(log_level).lower() == "debug"
-    out_dir = ensure_output_dir(exp_id, output_root)
-    shutil.copy2(exp_path, out_dir / exp_path.name)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if copy_exp:
+        shutil.copy2(exp_path, out_dir / exp_path.name)
 
     agent_cfg = exp.get("agent", {})
     model = agent_cfg.get("model") or os.environ.get("OPENROUTER_MODEL", "")
@@ -209,8 +226,6 @@ def run_exp(exp_path: Path) -> Path:
 
     if not model or not base_url or not api_key:
         raise RuntimeError("Missing agent config: model/base_url/api_key")
-
-    agent = MainAgent(model=model, base_url=base_url, api_key=api_key)
 
     shield_cfg = exp.get("shield", {})
     shield_enabled = bool(shield_cfg.get("enabled", False))
@@ -227,13 +242,11 @@ def run_exp(exp_path: Path) -> Path:
     sandbox_persist = bool(sandbox_cfg.get("persist_workspace", True))
     sandbox_link_inputs = bool(sandbox_cfg.get("link_inputs", True))
 
-    agent.server_whitelist = set()
-    agent.server_blacklist = set()
-
     for run_case in exp.get("runs", []):
         run_id = run_case.get("run_id")
         query = run_case.get("query")
         server_id = run_case.get("server_id")
+        server_path = run_case.get("server_path")
         pre_logs: list[dict] = []
         exec_logs: list[dict] = []
         run_sandbox = run_case.get("sandbox", {})
@@ -257,6 +270,7 @@ def run_exp(exp_path: Path) -> Path:
             "run_id": run_id,
             "server_id": server_id,
             "query": query,
+            "agent_id": agent_id,
             "sandbox": {
                 "workspace_dir": str(workspace_dir) if workspace_dir else None,
                 "allowed_paths": [str(path) for path in run_allowed_paths],
@@ -280,7 +294,7 @@ def run_exp(exp_path: Path) -> Path:
         deny = None
         try:
             if server_id:
-                servers = load_servers(server_id)
+                servers = load_servers(server_id, server_path)
                 if len(servers) > 1:
                     client = MultiServerClient(servers)
                 else:
@@ -332,6 +346,7 @@ def run_exp(exp_path: Path) -> Path:
 
         record = {
             "run_id": run_id,
+            "agent_id": agent_id,
             "server_id": server_id,
             "query": query,
             "ok": ok,
@@ -342,6 +357,8 @@ def run_exp(exp_path: Path) -> Path:
             "deny": deny,
         }
         write_jsonl_line(out_dir / "run_records.jsonl", record)
+        if record_hook:
+            record_hook(record, run_ctx)
         status = "ok" if ok else ("deny" if deny else "error")
         print(f"[run_exp] {run_id} {status}")
         if deny and debug:
@@ -349,6 +366,30 @@ def run_exp(exp_path: Path) -> Path:
             print(json.dumps(deny, ensure_ascii=True, indent=2))
 
     return out_dir
+
+
+def run_exp(exp_path: Path) -> Path:
+    load_env(ROOT / ".env")
+    exp = read_yaml(exp_path)
+
+    exp_id = exp["exp_id"]
+    output_root = exp.get("output_root", "results")
+    out_dir = ensure_output_dir(exp_id, output_root)
+
+    agent_cfg = exp.get("agent", {})
+    model = agent_cfg.get("model") or os.environ.get("OPENROUTER_MODEL", "")
+    base_url = agent_cfg.get("base_url") or os.environ.get("OPENROUTER_BASE_URL", "")
+    api_key_env = agent_cfg.get("api_key_env", "OPENROUTER_API_KEY")
+    api_key = os.environ.get(api_key_env, "")
+
+    if not model or not base_url or not api_key:
+        raise RuntimeError("Missing agent config: model/base_url/api_key")
+
+    agent = MainAgent(model=model, base_url=base_url, api_key=api_key)
+    agent.server_whitelist = set()
+    agent.server_blacklist = set()
+
+    return run_exp_with_agent(exp_path, exp, agent, out_dir, copy_exp=True)
 
 
 class _EmptyTools:

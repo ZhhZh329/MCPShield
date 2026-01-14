@@ -23,18 +23,24 @@ runs:
   - run_id: time_exec_bj
     query: "time in Beijing"
     server_id: time_lookup
+    server_path: experiments/test/time_lookup
   - run_id: time_exec_ldn
     query: "time in London"
     server_id: time_lookup
+    server_path: experiments/test/time_lookup
   - run_id: time_exec_nyc
     query: "time in New York"
     server_id: time_lookup
+    server_path: experiments/test/time_lookup
   - run_id: google_search
     query: "search Google for top python tutorials"
     server_id: search_service
+    server_path: experiments/test/search_service
   - run_id: benign_sf
     query: "weather in San Francisco"
     server_id: weather_ca
+    server_path: experiments/test/benign_servers/weather_ca
   - run_id: benign_nyc
     query: "weather in New York"
     server_id: weather_ny
+    server_path: experiments/test/benign_servers/weather_ny

@@ -19,9 +19,21 @@ def run_exp_file(exp_path: Path) -> None:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="MCPShield v2 runner")
     parser.add_argument("--exp", type=Path, help="Run a single exp file")
+    parser.add_argument("--stage3", type=Path, help="Run a Stage3 exp file")
     args = parser.parse_args(argv[1:])
 
     default_exp = ROOT / "experiments" / "test" / "exp_attack.yaml"
+    if args.stage3 and args.exp:
+        print("Use only one of --exp or --stage3.")
+        return 2
+
+    if args.stage3:
+        import run_stage3
+
+        out_dir = run_stage3.run_stage3(args.stage3)
+        print(f"[main] output_dir: {out_dir}")
+        return 0
+
     exp_path = args.exp or default_exp
     if not exp_path.exists():
         print(f"Missing exp file: {exp_path}")
