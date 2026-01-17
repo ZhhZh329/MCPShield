@@ -7,6 +7,7 @@ import io
 import json
 import os
 import platform
+import random
 import socket
 import subprocess
 import time
@@ -469,6 +470,8 @@ class MCPShield:
         base_url: str | None = None,
         api_key: str | None = None,
         pre_mock_count: int = 2,
+        pre_tool_limit: int = 0,
+        pre_result_max_chars: int = 0,
         pre_deny_ratio: float = 0.5,
         whitelist: set[str] | None = None,
         blacklist: set[str] | None = None,
@@ -481,6 +484,8 @@ class MCPShield:
         self._exec_enabled = exec_enabled
         self._post_enabled = post_enabled
         self._pre_mock_count = pre_mock_count
+        self._pre_tool_limit = pre_tool_limit
+        self._pre_result_max_chars = pre_result_max_chars
         self._pre_deny_ratio = pre_deny_ratio
         self._whitelist = whitelist if whitelist is not None else set()
         self._blacklist = blacklist if blacklist is not None else set()
@@ -556,9 +561,17 @@ class MCPShield:
     def _run_pre(self, server_id: str) -> dict:
         manifest = self._client.fetch_manifest()
         tools = manifest.get("tools", [])
+        tools_to_check = tools
+        if self._pre_tool_limit:
+            valid_tools = [tool for tool in tools if isinstance(tool, dict) and "name" in tool]
+            if len(valid_tools) > self._pre_tool_limit:
+                rng = random.Random(server_id)
+                tools_to_check = rng.sample(valid_tools, self._pre_tool_limit)
+            else:
+                tools_to_check = valid_tools
         mock_results: list[dict[str, Any]] = []
 
-        for tool in tools:
+        for tool in tools_to_check:
             if not isinstance(tool, dict) or "name" not in tool:
                 continue
             tool_name = tool["name"]
@@ -596,6 +609,8 @@ class MCPShield:
                     tool_entry["mocks"].append({"arguments": args, "result": None, "error": str(exc)})
 
             mock_results.append(tool_entry)
+
+        mock_results = self._truncate_mock_results(mock_results)
 
         if not mock_results:
             return {
@@ -651,6 +666,36 @@ class MCPShield:
             "flags": flags,
             "deny_score": deny_score,
         }
+
+    def _truncate_mock_results(self, mock_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        limit = self._pre_result_max_chars
+        if not limit or limit <= 0:
+            return mock_results
+        truncated_results: list[dict[str, Any]] = []
+        for entry in mock_results:
+            new_entry = dict(entry)
+            mocks = []
+            for mock in entry.get("mocks", []):
+                new_mock = dict(mock)
+                result = new_mock.get("result")
+                if result is None:
+                    mocks.append(new_mock)
+                    continue
+                if isinstance(result, str):
+                    result_str = result
+                else:
+                    try:
+                        result_str = json.dumps(result, ensure_ascii=True)
+                    except Exception:
+                        result_str = str(result)
+                if len(result_str) > limit:
+                    result_str = result_str[:limit] + "...<truncated>"
+                    new_mock["result_truncated"] = True
+                new_mock["result"] = result_str
+                mocks.append(new_mock)
+            new_entry["mocks"] = mocks
+            truncated_results.append(new_entry)
+        return truncated_results
 
     def _run_exec(self, tool_name: str, args: dict, invocation_ctx: dict | None = None) -> Any:
         run_ctx = {}

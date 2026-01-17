@@ -121,6 +121,7 @@ def load_servers(server_id: str, server_path: str | None = None) -> list[Any]:
             ROOT / "experiments" / "test" / "benign_servers",
             ROOT / "experiments" / "test" / "attackers",
             ROOT / "experiments" / "test",
+            ROOT / "experiments" / "test" / "attackers_new",
         ]
         server_path_obj = None
         for base in base_dirs:
@@ -233,6 +234,8 @@ def run_exp_with_agent(
     exec_enabled = bool(shield_cfg.get("exec", False))
     post_enabled = bool(shield_cfg.get("post", False))
     pre_mock_count = int(shield_cfg.get("pre_mock_count", 4))
+    pre_tool_limit = int(shield_cfg.get("pre_tool_limit", 0))
+    pre_result_max_chars = int(shield_cfg.get("pre_result_max_chars", 0))
     pre_deny_ratio = float(shield_cfg.get("pre_deny_ratio", 0.5))
 
     sandbox_cfg = exp.get("sandbox", {})
@@ -284,6 +287,8 @@ def run_exp_with_agent(
                 "exec": exec_enabled,
                 "post": post_enabled,
                 "pre_mock_count": pre_mock_count,
+                "pre_tool_limit": pre_tool_limit,
+                "pre_result_max_chars": pre_result_max_chars,
             },
             "start_ts": time.time(),
         }
@@ -315,6 +320,8 @@ def run_exp_with_agent(
                         base_url=base_url,
                         api_key=api_key,
                         pre_mock_count=pre_mock_count,
+                        pre_tool_limit=pre_tool_limit,
+                        pre_result_max_chars=pre_result_max_chars,
                         pre_deny_ratio=pre_deny_ratio,
                         whitelist=agent.server_whitelist,
                         blacklist=agent.server_blacklist,
